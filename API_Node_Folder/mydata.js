@@ -20,8 +20,6 @@ const Product = db.define('products', {
     quantity: Sequelize.INTEGER
 }); // used to define the Table Product
 
-db.sync({}); // executes db.define
-
 const CartProduct = db.define('carts', {
     id: {
         type: Sequelize.INTEGER,
@@ -36,28 +34,32 @@ const CartProduct = db.define('carts', {
 
 db.sync({}); // executes db.define
 
-function getProducts () { return Product.findAll(); } // end of the function getProducts
+function getProducts () { return Product.findAll(); }
 
-function addToProducts(product) // definition of the function addToProducts
-{
-    // Product.findById(product.id).then(cartItem => {
-    //     return;
-    // })
+function addToProducts(product) {
     return Product.create(
         {
             name: product.name,
             price: product.price,
             quantity: 1,
         });
-} // end of the function definition
+}
 
-function addToCart (product) // definition of the function addToCart
-{
-    CartProduct.findById(product.id).then(cartItem => {
-        cartItem.increment('quantity', {by: product.quantity});
-        cartItem.increment('amount', {by: product.amount});
-        return cartItem;
-    })
+/**
+ * Rewritten as a proper upsert.
+ *
+ * The original fired BOTH an update on the (possibly non-existent) row
+ * AND an unconditional `create`, so adding an existing product crashed
+ * on a duplicate primary key and adding a new one crashed on
+ * `cartItem.increment` of null (unhandled rejection).
+ */
+async function addToCart (product) {
+    const cartItem = await CartProduct.findById(product.id);
+    if (cartItem) {
+        await cartItem.increment('quantity', {by: product.quantity});
+        await cartItem.increment('amount', {by: product.price * product.quantity});
+        return cartItem.reload();
+    }
     return CartProduct.create(
         {
             id: product.id,
@@ -66,52 +68,53 @@ function addToCart (product) // definition of the function addToCart
             quantity: product.quantity,
             amount: product.amount
         });
-} // end of the function addToCart
+}
 
-function getCart() // definition of the function getCart
-{
-    if (CartProduct.findAll())
-        return CartProduct.findAll();
-    else
-        return 0;
-} // end of the function getCart
+function getCart() {
+    // The old version evaluated `if (CartProduct.findAll())` — a Promise is
+    // always truthy — and queried the table twice.
+    return CartProduct.findAll();
+}
 
-function decrementCart(cartItemID) // definition of the function decrementCart
-{
-    CartProduct.findById(cartItemID).then(user => {
-        user.decrement('quantity', {by: 1});
-    user.decrement('amount', {by: user.price});
-})
-} // end of the function decrementCart
+/**
+ * Decrement with a floor: at quantity 1 the line is removed entirely
+ * instead of drifting to 0 / negative quantities and negative amounts.
+ */
+async function decrementCart(cartItemID) {
+    const cartItem = await CartProduct.findById(cartItemID);
+    if (!cartItem) {
+        return null;
+    }
+    if (cartItem.quantity <= 1) {
+        await cartItem.destroy();
+        return null;
+    }
+    await cartItem.decrement('quantity', {by: 1});
+    await cartItem.decrement('amount', {by: cartItem.price});
+    return cartItem.reload();
+}
 
-function incrementCart(cartItemID) // definition of the function incrementCart
-{
-    CartProduct.findById(cartItemID).then(user => {
-        user.increment('quantity', {by: 1});
-    user.increment('amount', {by: user.price});
-})
-} // end of the function incrementCart
+async function incrementCart(cartItemID) {
+    const cartItem = await CartProduct.findById(cartItemID);
+    if (!cartItem) {
+        return null;
+    }
+    await cartItem.increment('quantity', {by: 1});
+    await cartItem.increment('amount', {by: cartItem.price});
+    return cartItem.reload();
+}
 
-function noofproducts() // definition of the function noofproducts
-{
-    if(CartProduct.sum('quantity'))
-        return CartProduct.sum('quantity');
-    else
-        return 0;
-} // end of the function noofproducts
+function noofproducts() {
+    return CartProduct.sum('quantity').then((sum) => sum || 0);
+}
 
-function totalamount() // definition of the function totalamount
-{
-    if(CartProduct.sum('amount'))
-        return CartProduct.sum('amount');
-    else
-        return 0;
-} // end of the function totalamount
+function totalamount() {
+    return CartProduct.sum('amount').then((sum) => sum || 0);
+}
 
-function cartCheckout(data) { CartProduct.destroy({ where: {}}); } // end of the function cartCheckout
+function cartCheckout(data) { return CartProduct.destroy({ where: {}}); }
 
-function delFromCart(cartItemID) // definition of the function delFromCart
-{
+function delFromCart(cartItemID) {
     return CartProduct.destroy(
         {
             where:
@@ -119,7 +122,7 @@ function delFromCart(cartItemID) // definition of the function delFromCart
                     id: cartItemID
                 }
         });
-} // end of the function delFromCart
+}
 
 module.exports = {
     getProducts,
@@ -133,7 +136,3 @@ module.exports = {
     incrementCart,
     decrementCart
 };
-
-// all exported files
-
-// this is the file which interacts with the database
