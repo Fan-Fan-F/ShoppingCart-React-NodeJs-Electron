@@ -168,3 +168,22 @@ const db = new Sequelize('shoppingcart', 'root', 'root', {
   7. ``` /countproducts ```: To count the number of products in a cart
   8. ``` /totalamount ```: To calculate the total amount to be paid
   
+
+## Fork improvements
+
+Backend hardening of the cart API (`API_Node_Folder/`):
+
+* **Fixed `addToCart` upsert** — the original fired BOTH an update and an
+  unconditional `create`, so re-adding a product crashed on a duplicate primary
+  key and adding a new one threw an unhandled rejection (`increment` on null).
+  It is now a proper find-then-update-or-create with atomic `amount` updates.
+* **Hanging requests fixed** — `incrementCart` / `decrementCart` / `delfromcart`
+  never sent any response (the `res.redirect` was commented out), so those API
+  calls hung forever. Every route now awaits the DB call and always responds,
+  with an `asyncHandler` wrapper that turns failures into HTTP 500 instead of
+  unhandled rejections, plus 400/404 validation.
+* **Quantity floor** — decrementing at quantity 1 now removes the line instead
+  of drifting to zero/negative quantities and negative amounts.
+* **Dead-code cleanup** — removed always-truthy `if (promise)` checks and
+  double queries in `getCart` / `noofproducts` / `totalamount`.
+* **Repository hygiene** — removed committed `.idea/` IDE configuration.
